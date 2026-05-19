@@ -4,149 +4,57 @@ import requests
 import time
 from datetime import datetime, timedelta
 
-# ==========================================
-# 1. SYSTEM CONFIGURATION
-# ==========================================
+# --- CONFIG ---
 NTFY_TOPIC = "ars_elite_signals_2026"
 NV_KEY = st.secrets["NVIDIA_API_KEY"]
+PAIRS = ["EURUSDT", "GBPUSDT", "USDJPY", "AUDUSDT", "USDCAD", "USDCHF", "EURGBP", "EURJPY", "GBPJPY"]
 
-# Pairs mapped for Binance API compatibility 
-PAIRS = [
-    "EURUSDT", "GBPUSDT", "USDJPY", "AUDUSDT", "USDCAD", "USDCHF", 
-    "EURGBP", "EURJPY", "GBPJPY", "AUDJPY", "EURAUD", "EURCAD", 
-    "AUDCAD", "GBPAUD", "GBPCHF", "CADCHF", "CHFJPY"
-]
-
-# ==========================================
-# 2. THE AI BRAIN (LLAMA 3.1 70B)
-# ==========================================
-def run_elite_debate(df, symbol, learning_history):
-    last_price = df['close'].iloc[-1]
-    
-    # Format the last 8 trades so the AI can learn from recent mistakes/wins
-    history_context = "\n".join(learning_history[-8:]) 
-    
-    prompt = f"""
-    You are a Virtual Trading Floor of 4 Elite Agents debating {symbol} at ${last_price}.
-    
-    RECENT TRADING HISTORY (Adjust your strictness based on this):
-    {history_context if history_context else "No history yet. Be strict and conservative."}
-
-    PROFESSIONAL CHECKLIST:
-    1. MARKET REGIME: Is it trending cleanly or chopping?
-    2. TECHNICALS: Find Market Structure Shifts (MSS) & Liquidity Sweeps.
-    3. MATH: Calculate a strict 1:3 Risk-to-Reward ratio.
-
-    DATA (Last 10 minutes): {df.tail(10).to_json()}
-
-    OUTPUT FORMAT EXACTLY LIKE THIS:
-    DECISION: [CALL, PUT, or REJECT]
-    CONFIDENCE: [0-100%]
-    SL: [Price] | TP: [Price]
-    REASON: [1 short sentence explaining the MSS or Liquidity Sweep]
-    """
-
-    headers = {
-        "Authorization": f"Bearer {NV_KEY}", 
-        "Content-Type": "application/json"
-    }
-    
-    payload = {
-        "model": "meta/llama-3.1-70b-instruct", 
-        "messages": [{"role": "user", "content": prompt}], 
-        "temperature": 0.1
-    }
-    
+# --- AI BRAIN ---
+def run_debate(df, symbol, history):
+    prompt = f"Analyze {symbol}. MSS? Liquidity? 1:3 RR? History: {history}. Data: {df.tail(5).to_json()}. Output: DECISION: [CALL/PUT/REJECT], CONFIDENCE: [%], SL: [Price], TP: [Price]."
+    headers = {"Authorization": f"Bearer {NV_KEY}", "Content-Type": "application/json"}
+    payload = {"model": "meta/llama-3.1-70b-instruct", "messages": [{"role": "user", "content": prompt}], "temperature": 0.1}
     try:
-        response = requests.post("https://integrate.api.nvidia.com/v1/chat/completions", headers=headers, json=payload, timeout=8)
-        return response.json()['choices'][0]['message']['content']
-    except Exception as e:
-        return "DECISION: REJECT"
+        r = requests.post("https://integrate.api.nvidia.com/v1/chat/completions", headers=headers, json=payload, timeout=10)
+        return r.json()['choices'][0]['message']['content']
+    except: return "REJECT"
 
-# ==========================================
-# 3. FAST DATA & ALERTS
-# ==========================================
-def send_ntfy(msg, confidence):
-    # If AI is highly confident, trigger the highest priority alarm on your phone
-    priority = "urgent" if "100" in confidence or "90" in confidence else "high"
-    requests.post(f"https://ntfy.sh/{NTFY_TOPIC}", 
-                  data=msg.encode('utf-8'),
-                  headers={"Title": "💎 ELITE SIGNAL", "Priority": priority, "Tags": "chart_with_upwards_trend,moneybag"})
+# --- UI ---
+st.set_page_config(page_title="V2.1 Stable", page_icon="🏛️")
+st.title("🏛️ Omni-Elite Stable")
 
-def get_data(symbol):
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=15"
-    res = requests.get(url).json()
-    df = pd.DataFrame(res, columns=['t', 'o', 'h', 'l', 'c', 'v', 'ct', 'q', 'n', 'tb', 'tq', 'i'])
-    df['close'] = df['c'].astype(float)
-    return df
+if 'history' not in st.session_state: st.session_state.history = []
 
-# ==========================================
-# 4. USER INTERFACE & MAIN LOOP
-# ==========================================
-st.set_page_config(page_title="Omni-Elite AI", page_icon="🏛️")
-st.title("🏛️ Omni-Elite Trading Floor")
-
-# Initialize AI Memory
-if 'history' not in st.session_state: 
-    st.session_state.history = []
-if 'active_trades' not in st.session_state: 
-    st.session_state.active_trades = {}
-
-st.sidebar.header("🧠 AI Training Memory")
-st.sidebar.write("Recent outcomes the AI is using to learn:")
-st.sidebar.write(st.session_state.history)
-
-if st.button("🚀 ACTIVATE AUTO-LEARNING SCANNER"):
-    st.success("System Live. Scanning all pairs independently...")
-    status_text = st.empty()
+if st.button("🚀 START SCANNER"):
+    st.success("Scanner Active. Keep this tab OPEN.")
+    placeholder = st.empty()
     
+    # Using a safer loop for mobile
     while True:
         for pair in PAIRS:
-            try:
-                status_text.info(f"Agents analyzing: {pair}...")
-                df = get_data(pair)
-                current_price = df['close'].iloc[-1]
-                
-                # --- AUTO-TRAINING VERIFICATION ---
-                # Check if a past trade finished, so we can teach the AI if it won or lost
-                if pair in st.session_state.active_trades:
-                    trade_data = st.session_state.active_trades[pair]
-                    if datetime.now() >= trade_data['check_at']:
-                        is_win = (current_price > trade_data['entry'] and trade_data['dir'] == "CALL") or \
-                                 (current_price < trade_data['entry'] and trade_data['dir'] == "PUT")
-                        
-                        result = "WIN ✅" if is_win else "LOSS ❌"
-                        st.session_state.history.append(f"{pair} {trade_data['dir']} -> {result}")
-                        del st.session_state.active_trades[pair] # Remove from pending
-                        st.write(f"Memory Updated: {pair} resulted in {result}")
-
-                # --- NEW SIGNAL SCANNING ---
-                analysis = run_elite_debate(df, pair, st.session_state.history)
-                
-                if "DECISION: CALL" in analysis or "DECISION: PUT" in analysis:
-                    direction = "CALL" if "CALL" in analysis else "PUT"
+            with placeholder.container():
+                st.info(f"Agents Analyzing: {pair}")
+                try:
+                    # Fetch
+                    url = f"https://api.binance.com/api/v3/klines?symbol={pair}&interval=1m&limit=10"
+                    data = requests.get(url).json()
+                    df = pd.DataFrame(data, columns=['t','o','h','l','c','v','ct','q','n','tb','tq','i'])
+                    df['close'] = df['c'].astype(float)
                     
-                    # Store trade in memory to check the result 65 seconds later
-                    st.session_state.active_trades[pair] = {
-                        "entry": current_price,
-                        "dir": direction,
-                        "check_at": datetime.now() + timedelta(seconds=65)
-                    }
+                    # Brain
+                    ans = run_debate(df, pair, st.session_state.history)
                     
-                    # Send alert to your phone
-                    signal_time = datetime.now().strftime('%H:%M:%S')
-                    conf = analysis.split("CONFIDENCE:")[1].split("\n")[0].strip() if "CONFIDENCE:" in analysis else "N/A"
-                    
-                    alert_msg = f"PAIR: {pair}\nTIME: {signal_time}\n{analysis}"
-                    send_ntfy(alert_msg, conf)
-                    st.success(f"🔥 Signal Sent: {pair} at {signal_time}")
-
-                time.sleep(0.5) # Fast scan delay
-                
-            except Exception as e:
-                # If a pair isn't supported by the API, quietly skip it and keep running
-                continue
-                
-        # Small pause before restarting the loop
-        time.sleep(1)
-        st.rerun()
+                    if "CALL" in ans or "PUT" in ans:
+                        # Check confidence
+                        if "90%" in ans or "80%" in ans:
+                            requests.post(f"https://ntfy.sh/{NTFY_TOPIC}", data=f"{pair}\n{ans}".encode('utf-8'))
+                            st.success(f"SIGNAL SENT: {pair}")
+                            st.session_state.history.append(f"{pair}: {ans[:15]}")
+                            time.sleep(5) # Give you time to see it
+                except:
+                    continue
+                time.sleep(1) # Small rest between pairs to prevent overheat
+        
+        # Instead of st.rerun(), we just let the while loop continue
+        st.write("Cycle Complete. Restarting...")
+        time.sleep(2)
