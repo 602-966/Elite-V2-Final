@@ -46,7 +46,7 @@ if st.button("🚀 START SCANNER"):
                     
                     if "CALL" in ans or "PUT" in ans:
                         # Check confidence
-                        if "90%" in ans or "80%" in ans:
+                        if "DECISION: CALL" in ans or "DECISION: PUT" in ans:
                             requests.post(f"https://ntfy.sh/{NTFY_TOPIC}", data=f"{pair}\n{ans}".encode('utf-8'))
                             st.success(f"SIGNAL SENT: {pair}")
                             st.session_state.history.append(f"{pair}: {ans[:15]}")
